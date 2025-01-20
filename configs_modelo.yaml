@@ -1,4 +1,4 @@
-path: "/detect-greening-model/dataset/"
+path: "/content/detect-greening-model/dataset/"
 train: "train/"
 val: "valid/"
 
