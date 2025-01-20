@@ -8,7 +8,7 @@ import os
 # 100 imagens saudaveis
 # 100 imagens com greening
 
-arquivo_config = 'configs_modelo.yaml'
+arquivo_config = 'detect-greening-model/configs_modelo.yaml'
 
 model = YOLO('yolov8s.yaml')
 
