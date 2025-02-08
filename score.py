@@ -1,9 +1,6 @@
 import os
 import json
-import numpy as np
-import cv2
-# Se necessário, importe base64 para tratar strings codificadas:
-# import base64
+from urllib.parse import urlparse
 from ultralytics import YOLO
 
 def init():
@@ -12,108 +9,52 @@ def init():
     model_path = os.path.join(os.environ["AZUREML_MODEL_DIR"], "best.pt")
     model = YOLO(model_path)
 
-def validate_input(image_binaries):
+def validate_input(image_urls):
     """
-    Valida a entrada fornecida.
+    Valida se a entrada é uma lista de strings representando URLs.
     """
-    if not isinstance(image_binaries, list) or len(image_binaries) == 0:
-        return False, json.dumps({"error": "A entrada deve ser uma lista de dados binários de imagens."}, indent=4)
+    if not isinstance(image_urls, list) or len(image_urls) == 0:
+        return False, json.dumps({"error": "A entrada deve ser uma lista de URLs de imagens."}, indent=4)
+    for idx, url in enumerate(image_urls):
+        if not isinstance(url, str):
+            return False, json.dumps({"error": f"Cada item na lista deve ser uma string representando um URL. Erro no índice {idx}."}, indent=4)
+        if not (url.startswith("http://") or url.startswith("https://")):
+            return False, json.dumps({"error": f"O URL no índice {idx} não parece válido: {url}"}, indent=4)
     return True, None
 
-def process_images(image_binaries):
+def get_image_name_from_url(image_url):
     """
-    Converte cada item da lista para um array NumPy (imagem no formato OpenCV).
+    Extrai o nome do arquivo da URL da imagem.
     """
-    results = []
-    images_for_prediction = []
-    
-    for idx, image_bin in enumerate(image_binaries):
-        try:
-            # Caso você receba imagens em base64, descomente as linhas abaixo:
-            # if isinstance(image_bin, str):
-            #     image_bin = base64.b64decode(image_bin)
-            
-            nparr = np.frombuffer(image_bin, np.uint8)
-            img_np = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-            if img_np is None:
-                raise ValueError(f"Não foi possível decodificar a imagem no índice {idx}.")
-            images_for_prediction.append(img_np)
-        except Exception as e:
-            results.append({
-                "index": idx,
-                "error": f"Erro ao processar a imagem: {str(e)}"
-            })
-            images_for_prediction.append(None)
-    
-    return images_for_prediction, results
+    return os.path.basename(urlparse(image_url).path)
 
-def filter_valid_images(images_for_prediction):
+def run(image_urls):
     """
-    Filtra as imagens válidas para previsão e guarda os índices correspondentes.
+    Espera-se que `image_urls` seja uma lista de strings, onde cada string é um URL de imagem.
     """
-    valid_indices = [i for i, img in enumerate(images_for_prediction) if img is not None]
-    valid_images = [img for img in images_for_prediction if img is not None]
-    return valid_indices, valid_images
-
-def predict_images(valid_images):
-    """
-    Executa a previsão em lote com as imagens válidas.
-    """
-    return model.predict(valid_images, conf=0.5, save=False, save_txt=False)
-
-def map_predictions_to_results(valid_indices, predictions):
-    """
-    Mapeia os resultados às imagens válidas pelo índice original.
-    """
-    valid_results = {}
-    for valid_idx, pred in zip(valid_indices, predictions):
-        detections = []
-        if hasattr(pred, "boxes") and pred.boxes is not None:
-            for box in pred.boxes:
-                detections.append({
-                    "label": pred.names[int(box.cls)],
-                    "confidence": float(box.conf),
-                    "bbox": box.xyxy[0].tolist()
-                })
-        valid_results[valid_idx] = detections
-    return valid_results
-
-def consolidate_results(image_binaries, valid_results):
-    """
-    Consolida os resultados para todas as imagens, mantendo o índice original.
-    """
-    final_results = []
-    for idx in range(len(image_binaries)):
-        if idx in valid_results:
-            final_results.append({
-                "index": idx,
-                "detections": valid_results[idx]
-            })
-        else:
-            final_results.append({
-                "index": idx,
-                "error": "Imagem inválida ou não processada."
-            })
-    return final_results
-
-def run(image_binaries):
-    """
-    Espera-se que `image_binaries` seja uma lista onde cada elemento é o conteúdo binário de uma imagem.
-    """
-    is_valid, error_response = validate_input(image_binaries)
+    is_valid, error_response = validate_input(image_urls)
     if not is_valid:
         return error_response
 
-    images_for_prediction, results = process_images(image_binaries)
-    valid_indices, valid_images = filter_valid_images(images_for_prediction)
-    
-    if not valid_images:
-        return json.dumps({"error": "Nenhuma imagem válida foi fornecida."}, indent=4)
-    
     try:
-        predictions = predict_images(valid_images)
-        valid_results = map_predictions_to_results(valid_indices, predictions)
-        final_results = consolidate_results(image_binaries, valid_results)
+        # Chama o método predict passando a lista de URLs diretamente
+        predictions = model.predict(image_urls, conf=0.5, save=False, save_txt=False)
+        
+        final_results = []
+        for idx, pred in enumerate(predictions):
+            image_name = get_image_name_from_url(image_urls[idx])  # Extrai o nome da imagem a partir da URL
+            detections = []
+            if hasattr(pred, "boxes") and pred.boxes is not None:
+                for box in pred.boxes:
+                    detections.append({
+                        "label": pred.names[int(box.cls)],
+                        "confidence": float(box.conf),
+                        "bbox": box.xyxy[0].tolist()
+                    })
+            final_results.append({
+                "id": image_name,  # A chave 'id' agora contém o nome da imagem
+                "detections": detections
+            })
     except Exception as e:
         return json.dumps({"error": str(e)}, indent=4)
 
